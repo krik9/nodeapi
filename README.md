@@ -782,7 +782,7 @@ Using MongoDB - Adding Jobs resource
                 }
             ]
         }
-    i. Now let's go to compass and edit any two of the records experience to  '2 Years - 5 Years' and '5 Years+' and open postman and create GET request with url "{{DOMAIN}}/api/v1/stats/node". This should give result like
+    i. Now let's open compass and edit any two of the records experience to  '2 Years - 5 Years' and '5 Years+' and open postman and create GET request with url "{{DOMAIN}}/api/v1/stats/node". This should give result like
         {
             "success": true,
             "data": [
@@ -812,3 +812,254 @@ Using MongoDB - Adding Jobs resource
                 }
             ]
         }
+    Save this request as "Get Job stats" and description "Get all job statistics"
+Advance Global Error Handling
+*****************************
+1. Creating Error Handling Class
+    a. create utils/errorHandler.js file with following details
+        class ErrorHandler extends Error {
+            constructor(message, statusCode) {
+                super(message);
+                this.statusCode = statusCode;
+
+                Error.captureStackTrace(this, this.constructor)
+            }
+        }
+
+        module.exports = ErrorHandler;
+2. Creating Errors middleware
+    a. create middlewares/errors.js file with following details
+        
+        module.exports = (err, req, res, next) => {
+            err.statusCode - err.statusCode || 500;
+            err.message = err.message || 'Internal Server Error.';
+
+            res.status(err.statusCode).json({
+                success: false,
+                message: err.message
+            });
+        } 
+3. Production vs development errors
+    a. To seggregate both errors, we will replace middlewares/errors.js as follows
+        module.exports = (err, req, res, next) => {
+            err.statusCode = err.statusCode || 500;
+
+            if (process.env.NODE_ENV === 'development') {
+                res.status(err.statusCode).json({
+                    success: false,
+                    error: err,
+                    errMessage: err.message,
+                    stack: err.stack
+                })
+            }
+
+            if (process.env.NODE_ENV === 'production') {
+                let error = { ...err };
+                error.message = err.message;
+
+                res.status(err.statusCode).json({
+                    success: false,
+                    message: error.message || 'Internal Server Error.'
+                })
+            }
+        }
+    b. Open controllers/jobController.js and import
+        const ErrorHandler = require('../utils/errorHandler');
+       We will replace below portion of code in updateJob function  
+            if (!job) {
+                res.status(404).json({
+                    success: false,
+                    message: 'Job not found.'
+                })
+            }
+            
+        Replace it as below    
+            if (!job) {
+                return next(new ErrorHandler('Job not found',404));
+            }
+    c. Now if you open postman and try "update job"  with fake id like {{DOMAIN}}/api/v1/job/5ea2f29bab67e8755b2a7265. it returns results in html
+            <!DOCTYPE html>
+            <html lang="en">
+
+            <head>
+                <meta charset="utf-8">
+                <title>Error</title>
+            </head>
+
+            <body>
+                <pre>Error: Job not found<br> &nbsp; &nbsp;at exports.updateJob (/home/fpengine/mysrc/nodeapi/controllers/jobsController.js:51:21)<br> &nbsp; &nbsp;at processTicksAndRejections (internal/process/task_queues.js:97:5)</pre>
+            </body>
+
+            </html>
+        it is because we haven't imported middlewares
+    d. open app.js and edit the following details
+            const errorMiddleware = require('./middlewares/errors');
+
+            //middleware to handle errors
+            app.use(errorMiddleware);
+    e. Now if you open postman and try "update job"  with fake id like {{DOMAIN}}/api/v1/job/5ea2f29bab67e8755b2a7265. it returns results as below
+            {
+                "success": false,
+                "error": {
+                    "statusCode": 404
+                },
+                "errMessage": "Job not found",
+                "stack": "Error: Job not found\n    at exports.updateJob (/home/fpengine/mysrc/nodeapi/controllers/jobsController.js:51:21)\n    at processTicksAndRejections (internal/process/task_queues.js:97:5)"
+            }
+        you can even run as "npm run prod" and verify how it appears in production
+4. Catching async errors
+    a. To simulate the error, open postman and use "create new job" and in body remove title field and send the POST request, postman will stuck since response failed, however we don't see it because it's not handled and you can see it console.log as well. Either you can do try catch block or global handler class
+    b. create middlewares/catchAsyncErrors.js as follows
+        module.exports = func => (req, res, next) => 
+            Promise.resolve(func(req,res,next))
+            .catch(next);
+    c. open controllers/jobController.js and add the following
+        const catchAsyncErrors = require('../middlewares/catchAsyncErrors');
+        
+        wrap catchAsyncErrors () function around newJob function as below
+            // Create a new job => /api/v1/job/new
+            exports.newJob = catchAsyncErrors ( async (req, res, next) => {
+                const job = await Job.create(req.body); //since we will use global error handlers, we are not using try catch(promise) concept, instead we use await.
+                //Also, since we use await, we need async function.
+                res.status(200).json({
+                    success: true,
+                    message: 'Job Created',
+                    data: job
+                });
+            });
+    d. if you open postman and use "create new job" and in body remove title field and send the POST request, it returns the result as follows
+        {
+            "success": false,
+            "error": {
+                "errors": {
+                    "title": {
+                        "message": "Please enter job title",
+                        "name": "ValidatorError",
+                        "properties": {
+                            "message": "Please enter job title",
+                            "type": "required",
+                            "path": "title"
+                        },
+                        "kind": "required",
+                        "path": "title"
+                    }
+                },
+                "_message": "Job validation failed",
+                "message": "Job validation failed: title: Please enter job title",
+                "name": "ValidationError",
+                "statusCode": 500
+            },
+            "errMessage": "Job validation failed: title: Please enter job title",
+            "stack": "ValidationError: Job validation failed: title: Please enter job title\n    at new ValidationError (/home/fpengine/mysrc/nodeapi/node_modules/mongoose/lib/error/validation.js:31:11)\n    at model.Document.invalidate (/home/fpengine/mysrc/nodeapi/node_modules/mongoose/lib/document.js:2555:32)\n    at /home/fpengine/mysrc/nodeapi/node_modules/mongoose/lib/document.js:2377:17\n    at /home/fpengine/mysrc/nodeapi/node_modules/mongoose/lib/schematype.js:1105:9\n    at processTicksAndRejections (internal/process/task_queues.js:79:11)"
+        }
+    e. Finally wrap all methods in catchAsyncErrors() method.
+5. Handling Unhandled Promise Rejection
+    a. To simulate this error, open config/config.env and edit
+        DB_LOCAL_URI = mongodb://localhost:27017/jobs to 
+        DB_LOCAL_URI = mongod://localhost:27017/jobs
+        and now you get unhandled promise rejection
+    b. open app.js and edit following
+        create "const server = " variable for the server
+
+        //Handling unhandled Promise Rejection
+
+        process.on('unhandledRejection', err => {
+            console.log(`Error: ${err.message}`);
+            console.log('Shutting Down the server due to unhandled promise rejection');
+            server.close(() => {
+                process.exit(1);
+            })
+        });
+        Now this handles the exception and prints the log, so go back and restore config/config.env file
+6. Handling Uncaught Exceptions
+    a. To simulate the error, open app.js and at the end add and save following
+        console.log(dsdd);
+    b. To handle this error, open app.js and before connecting to db(otherwise, if you create this at the end, it may not handle error), add the following
+        //Handling uncaught exception
+        process.on('uncaughtException',err => {
+            console.log(`Error: ${err.message}`);
+            console.log('Shutting down the server due to uncaught exception');
+            process.exit(1);
+        });
+        Now this handles the exception and prints the log, so remove the last line
+            console.log(dsdd);
+7. Handle Unhandled Routes
+    a. To simulate the error, open postman and send get request {{DOMAIN}}/api/v1/job and the response is 
+        <!DOCTYPE html>
+        <html lang="en">
+
+        <head>
+            <meta charset="utf-8">
+            <title>Error</title>
+        </head>
+
+        <body>
+            <pre>Cannot GET /api/v1/job</pre>
+        </body>
+
+        </html> 
+    a. Open app.js and add the following after app.use('/api/v1/jobs') so that it captures the unhandled routes exceptions
+        const errorHandler = require('./middlewares/errors');
+        
+        //Handle unhandled routes
+        app.all('*',(req,res,next) => {
+            next(new errorHandler(`${req.originalUrl} route not found`,404))
+        });
+    b. Now open postman and send get request {{DOMAIN}}/api/v1/job and the response is 
+        {
+            "success": false,
+            "error": {
+                "statusCode": 404
+            },
+            "errMessage": "/api/v1/job route not found",
+            "stack": "Error: /api/v1/job route not found\n    at /home/fpengine/mysrc/nodeapi/app.js:48:10\n    at Layer.handle [as handle_request] (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/layer.js:95:5)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:137:13)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:131:14)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:131:14)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:131:14)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:131:14)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:131:14)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:131:14)\n    at Route.dispatch (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/route.js:112:3)\n    at Layer.handle [as handle_request] (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/layer.js:95:5)\n    at /home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:281:22\n    at param (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:354:14)\n    at param (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:365:14)\n    at Function.process_params (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:410:3)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:275:10)\n    at /home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:635:15\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:260:14)\n    at Function.handle (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:174:3)\n    at router (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:47:12)\n    at Layer.handle [as handle_request] (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/layer.js:95:5)\n    at trim_prefix (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:317:13)\n    at /home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:284:7\n    at Function.process_params (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:335:12)\n    at next (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:275:10)\n    at jsonParser (/home/fpengine/mysrc/nodeapi/node_modules/body-parser/lib/types/json.js:110:7)\n    at Layer.handle [as handle_request] (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/layer.js:95:5)\n    at trim_prefix (/home/fpengine/mysrc/nodeapi/node_modules/express/lib/router/index.js:317:13)"
+        }
+8. Validation & Mongoose ID Errors
+    a. To simulate the mongoose id error, open postman and use Update job and change id to gibberish value like {{DOMAIN}}/api/v1/job/ahjss89skjahsl
+    you will get cast error.
+    b. open middlewares/errors.js and import ErrorHandler add the following within production error handler condition
+
+
+        //Wrong Mongoose Object ID error
+        if(err.name ==='CastError'){
+            const message = `Resource not found. Invaid: ${err.path}`;
+            error = new ErrorHandler(message,404)
+        }
+    c. Now run npm run prod and open postman and use Update job and change id to gibberish value like {{DOMAIN}}/api/v1/job/ahjss89skjahsl
+        {
+            "success": false,
+            "message": "Resource not found. Invaid: _id"
+        }
+    d. To simulate validation error, open postman and use Create new job and remove title and experience fields and send the POST request
+        you will see multiple errors.
+    e. Open middlewares/errors.js and add the following
+        //Handling Mongoose validation Error //To handle multiple validation errors
+        if(err.name==='ValidationError'){
+            const message = Object.values(err.errors).map(value =>value.message);
+            error = new ErrorHandler(message,400);
+        }
+        Also change "res.status(err.statusCode).json" to "res.status(error.statusCode).json"
+    f. Run "npm run prod" and open postman and use Create new job and remove title and experience fields and send the POST request
+        you will see response as dollows
+        {
+            "success": false,
+            "message": "Path `experience` is required.,Path `jobType` is required.,Please enter job title"
+        }
+9. Using Error Handler + Bug Fixing
+    a. open models/jobs and change below things for industry, jobType, experience
+        required: [true,'Please enter industry for this job'],
+        required: [true,'Please enter jobType'],
+        required: [true,'Please enter min education for this job type'],
+        required: [true,'Please enter experience required for this job'],
+    b. open postman and use Create new job and remove title,jobtype and experience fields and send the POST request
+        you will see following error when we run "npm run prod"
+            {
+                "success": false,
+                "message": "Please enter experience required for this job,Please enter jobType,Please enter job title"
+            }
+    c. Apply error handler to all controller methods in getJob, deleteJob and jobStats functions
+            return next(new ErrorHandler('Job not found',404));
+
+            return next(new ErrorHandler('No stats found for - ${req.params.topic}',200));
+
+

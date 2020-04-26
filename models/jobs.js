@@ -46,7 +46,7 @@ const jobSchema = new mongoose.Schema({
     },
     industry: {
         type: [String], //Array value of strings
-        required: true,
+        required: [true,'Please enter industry for this job'],
         enum: {
             values: [
                 'Business',
@@ -61,7 +61,7 @@ const jobSchema = new mongoose.Schema({
     },
     jobType: {
         type: String, //Only one value, even though we have options
-        required: true,
+        required: [true,'Please enter jobType'],
         enum: {
             values: [
                 'Permanent',
@@ -73,7 +73,7 @@ const jobSchema = new mongoose.Schema({
     },
     minEducation: {
         type: String,
-        required: true,
+        required: [true,'Please enter min education for this job type'],
         enum: {
             values: [
                 'Bachelors',
@@ -89,7 +89,7 @@ const jobSchema = new mongoose.Schema({
     },
     experience: {
         type: String,
-        required: true,
+        required: [true,'Please enter experience required for this job'],
         enum: {
             values: [
                 'No Experience',
