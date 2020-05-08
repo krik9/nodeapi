@@ -1061,5 +1061,127 @@ Advance Global Error Handling
             return next(new ErrorHandler('Job not found',404));
 
             return next(new ErrorHandler('No stats found for - ${req.params.topic}',200));
+Adding Filters to API
+*********************
+1. Advanced Filter for Jobs
+    a. create utils/apiFilters.js with following details
+        class APIFilters {
+            constructor(query, queryStr) {
+                this.query = query;
+                this.queryStr = queryStr;
+            }
 
+            filter() {
+                const queryCopy = { ...this.queryStr };
+                //Advance Filter using lt, lte, gt, gte
+                let queryStr = JSON.stringify(queryCopy);
+                queryStr = queryStr.replace(/\b(gt|gte|lt|lte)\b/g, match => `$${match}`);
+
+                this.query = this.query.find(JSON.parse(queryStr));
+                return this;
+
+            }
+        }
+
+        module.exports = APIFilters;
+    b. open controllers/jobsController.js and add the following
+        const APIFilters=require('../utils/apiFilters');
+
+        add below two lines in get all jobs function
+        const apiFilters = new APIFilters(job.find(),req.query).filter();
+        const jobs = await apiFilters.query;
+
+    c. Now open mongo compass and edit one of the document jobType to Permanent
+    d. Now open postman GET all jobs request and add query string ?jobType=Permanent(ex: {{DOMAIN}}/api/v1/jobs?jobType=Permanent)and send request
+        you should see one result. you can also try query string ?salary[gt]=100000 and you should see one result
+
+2. Sorting Jobs
+    a. open utils/apiFilters.js and ammend the following
+        Add below lines in filter function
+            //Removing fields from the query
+            const removeFields = ['sort'];
+            removeFields.forEach(e1=>delete queryCopy[e1]);
+        Also, add sort function 
+            sort(){
+                if(this.queryStr.sort){
+                    const sortBy=this.queryStr.sort.split(',').join(' ');
+                    this.query=this.query.sort(sortBy);
+                }else{
+                    this.query = this.query.sort('-postingDate')
+                }
+                return this;
+            }
+    b. open controllers/jobsController.js and add sort() function call as well as below
+        const apiFilters = new APIFilters(Job.find(),req.query)
+                        .filter()
+                        .sort();
+    c. Open postman and send request as "{{DOMAIN}}/api/v1/jobs?sort=-salary,JobType" to sort by salary in descending order and JobType. 
+        if we have two same salaries, then it will sort between them using jobType.
+        because of else, it will always sort the data by posting date in descending order.
+        To combine both filter and sort and test you can do something like 
+            {{DOMAIN}}/api/v1/jobs?salary[gt]=90000&sort=salary
+3. Limiting fields for Jobs
+    a. open utils/apiFilters.js and ammend the following
+            const removeFields = ['sort','fields'];
+        Also, add limitFields() function
+            limitFields() {
+                if (this.queryStr.fields) {
+                    const fields = this.queryStr.fields.split(',').join(' ');
+                    this.query = this.query.select(fields);
+                }else{
+                    this.query=this.query.select("-__v"); //To exclude this field by default
+                }
+                return this;
+            }
+    b. open controllers/jobsController.js and add limitFields() function call as well as below
+        const apiFilters = new APIFilters(Job.find(),req.query)
+                        .filter()
+                        .sort()
+                        .limitFields();
+    c. Now open postman and try the following
+        {{DOMAIN}}/api/v1/jobs?salary[gt]=90000&sort=salary&fields=lastDate,salary
+4. Search Jobs by Query
+    a. open utils/apiFilters.js and ammend the following
+            const removeFields = ['sort','fields','q'];
+        Also, add searchByQuery() function
+            searchByQuery() {
+                if (this.queryStr.q) {
+                    const qu = this.queryStr.q.split('-').join(' ');
+                    this.query = this.query.find({ $text: { $search: "\"" + qu + "\"" } });  
+                                                    //this works on title because we already created index
+                }
+                return this;
+            }
+    b. open controllers/jobsController.js and add searchByQuery() function call as well as below
+            const apiFilters = new APIFilters(Job.find(),req.query)
+                        .filter()
+                        .sort()
+                        .limitFields()
+                        .searchByQuery();
+    c. Now open postman and try the following
+        {{DOMAIN}}/api/v1/jobs?salary[gt]=90000&sort=salary&fields=lastDate,salary&q=node-js.
+            Note: this works on title because we already created index. Also for q param, it is case insensitive.
+5. Adding Pagination
+    a. open utils/apiFilters.js and ammend the following
+            const removeFields = ['sort', 'fields', 'q','page','limit'];
+        Also, add pagination() function
+                pagination() {
+                    const page = parseInt(this.queryStr.page, 10) || 1;
+                    const limit = parseInt(this.queryStr.limit, 10) || 10;
+                    const skipResults = (page - 1) * limit;
+
+                    this.query = this.query.skip(skipResults).limit(limit);
+
+                    return this;
+                }
+    b. open controllers/jobsController.js and add pagination() function call as well as below
+         const apiFilters = new APIFilters(Job.find(),req.query)
+                        .filter()
+                        .sort()
+                        .limitFields()
+                        .searchByQuery()
+                        .pagination();
+    c. Now open postman and try the following
+        {{DOMAIN}}/api/v1/jobs?limit=2&page=2
+        This displays page two with limit of 2 records per page.
 
