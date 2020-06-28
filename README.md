@@ -105,7 +105,7 @@
         /var/log/mongodb/mongod.log as user mongodb permissions). so if you just use "mongod" command to run the server, it creates a 
         /tmp/mongodb-27017.sock file and cause permission issues. so delete the file if you have ran it mistakenly an use "sudo mongod" or
         "sudo service mongod start"
-    c. Download and install mongo shell based on your OS and execute "show dbs;" to see if it works
+    c. Download and install mongo shell based on your OS and run "sudo mongo" to start the shell and execute "show dbs;" to see if it works
     d. Download and install mongodb compass based on your OS
 8. Connecting API with database
     a. Run "npm i mongoose --save" in terminal
@@ -1185,3 +1185,441 @@ Adding Filters to API
         {{DOMAIN}}/api/v1/jobs?limit=2&page=2
         This displays page two with limit of 2 records per page.
 
+Authentication, Users & Authorization
+*************************************
+1. Create User Model
+    a. create models/users.js with the following data
+        const mongoose = require('mongoose');
+        const validator = require('validator');
+
+        const userSchema = new mongoose.Schema({
+            name: {
+                type: String,
+                required: [true, 'Please enter your name']
+            },
+            email: {
+                type: String,
+                required: [true, 'PLease enter your email address'],
+                unique: true,
+                validate: [validator.isEmail, 'Please enter valid email address']
+            },
+            role: {
+                type: String,
+                enum: {
+                    values: ['user', 'employeer'],
+                    message: 'Please select correct role'
+                },
+                default: 'user'
+            },
+            password: {
+                type: String,
+                required: [true, 'Please enter password for your account'],
+                minlength: [8, 'your password must be at least 8 characters long'],
+                select: false
+            },
+            createdAt: {
+                type: Date,
+                default: Date.now
+            },
+            resetPasswordToken: String,
+            resetPasswordExpire: Date
+
+        });
+
+        module.exports = mongoose.model('User', userSchema);
+2. Encrypting Password while Registration
+    a. create controllers/authController.js and add the following data 
+        const User = require('../models/users');
+        const catchAsyncErrors = require('../middlewares/catchAsyncErrors');
+
+
+        //Register a new user => /api/v1/register
+        exports.registerUser = catchAsyncErrors(async (req, res, next) => {
+            const { name, email, password, role } = req.body;
+
+            const user = await User.create({
+                name,
+                email,
+                password,
+                role
+            });
+
+            res.status(200).json({
+                success: true,
+                message: 'User is registered.',
+                data: user
+            });
+        });
+    b. create routes/auth.js and add the following
+        const express = require('express');
+        const router = express.Router();
+
+        const { registerUser} = require('../controllers/authController');
+
+        router.route('/register').post(registerUser);
+
+        module.exports = router;
+    c. open app.js and add the following lines
+        const auth = require('./routes/auth');
+        app.use('/api/v1', auth);
+    d. open postman and add the following
+        right click on nodeapi folder and click on "Add Folder" and create folder with name as "Authentication" and 
+        description as "All routes related to authentication like: register a new user, login in user, password reset etc." 
+        Click on newly created Authentication folder and click on create request (+) button and change it to post request
+        and then click on headers and click on presets and then click on "Set JSON Header".
+        Click on Body and choose raw and format JSON and then type the body as follows
+        {
+            "name":"test user",
+            "email":"test@gmail.com",
+            "password":"simple1234",
+            "role":"employeer"
+        } 
+        Now choose the url as "{{DOMAIN}}/api/v1/register" and click send. In successful scenario, it sends something like
+        {
+            "success": true,
+            "message": "User is registered.",
+            "data": {
+                "role": "employeer",
+                "_id": "5ec8ba0b50e9421efc532f1c",
+                "name": "test user",
+                "email": "test@gmail.com",
+                "password": "simple1234",
+                "createdAt": "2020-05-23T05:52:11.936Z",
+                "__v": 0
+            }
+        }
+    e. if you notice the response/mongo db records, password is stored in plain text, to make sure, we encrypt the password,
+        we use bcryptjs. 
+        npm i --save bcryptjs
+
+        Now modify models/user.js and append
+        const bcrypt = require('bcryptjs');
+
+        // Encrypting passwords before saving
+        userSchema.pre('save', async function (next) {
+            this.password = await bcrypt.hash(this.password,10)
+        });
+    f. Now if you retry sending same request from postman, you will see an error saying, duplicate key error and you can see
+         the error code 11000, so open middlewares/errors.js and append below code for production scenario. 
+                // Handle mongoose duplicate key error 
+                if(err.code === 11000){
+                    const message = `Duplicate ${Object.keys(err.keyValue)} entered.`;
+                    error = new ErrorHandler(message,400);
+                }
+    g. Now if you send a new request from postman as below.
+        {
+            "name":"test user",
+            "email":"tst@gmail.com",
+            "password":"simple1234",
+            "role":"user"
+        }
+       response will be 
+        {
+            "success": true,
+            "message": "User is registered.",
+            "data": {
+                "role": "user",
+                "_id": "5ec8d6b5a93caf3208bda2ba",
+                "name": "test user",
+                "email": "tst@gmail.com",
+                "password": "$2a$10$GpM0tJNZen2h3NH7QjSfCekm28uG48JjOEYzfmJTnZs.32kTkFi4m",
+                "createdAt": "2020-05-23T07:54:29.807Z",
+                "__v": 0
+            }
+        }
+        so we can see that password is encrypted.
+    h.  Now open postman and click on save to save the request as follows. 
+            Request Name: "Register User"
+            Request Description: "Register user with email, password & role. Encrypted password will be saved in database."
+            choose Authentication folder and click on "save to Authentication".
+3. Generate JSON Web Token
+    a. we use json web token to verify our users. refer "jwt.io" website. basically it has 3 parts like headers, payload and 
+        verify signature. so install jsonwebtoken package 
+        npm i --save jsonwebtoken
+    b. open models/users.js and append the following
+        const jwt = require('jsonwebtoken');
+
+        // Return JSON Web Token
+        userSchema.methods.getJWTToken = function () {
+            return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
+                expiresIn: process.env.JWT_EXPIRES_TIME
+            });
+        }
+        }
+    c. open config/config.env and append the following
+        //Make some gibberish powerful string 
+        JWT_SECRET = dfdfkffhdhdld0380370833ccdb
+        //Token expires after 7 days
+        JWT_EXPIRES_TIME = 7d
+    d. open controllers/authController.js and append the following
+        //create JWT token
+        const token = user.getJWTToken();
+
+        Replace data:user with token in response // you can simply specify token here instead of token:token
+
+         res.status(200).json({
+            success: true,
+            message: 'User is registered.',
+            token
+        });
+    e. delete user records from mongodb and resend the earlier post request in postman with url: {{DOMAIN}}/api/v1/register
+        you will see the response like this
+            {
+                "success": true,
+                "message": "User is registered.",
+                "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjVlYzkxNzc1YmIxMzhhNWEwZTI1N2YzNCIsImlhdCI6MTU5MDIzNzA0NSwiZXhwIjoxNTkwODQxODQ1fQ.QvZEE_B41f9ym9QxbsJLt4YRrnumkR2MC1gOc6Y4KIY"
+            }
+4. Login User & Assign Token
+    a. open controllers/authController.js and append the following
+        const ErrorHandler = require('../utils/errorHandler');
+
+        // Login user => /api/v1/login
+        exports.loginUser = catchAsyncErrors(async (req, res, next) => {
+            const { email, password } = req.body;
+
+            //checks if email/password is not entered by user
+            if (!email || !password) {
+                return next(new ErrorHandler('Please enter email & password', 400));
+            }
+
+            // Finding user in database
+            const user = await User.findOne({ email }).select('+password');
+
+            if (!user) {
+                return next(new ErrorHandler('Invalid Email or Password', 401));
+            }
+
+            // Check if Password is correct
+            const isPasswordMatched = await user.comparePassword(password);
+
+            if (!isPasswordMatched) {
+                return next(new ErrorHandler('Invalid Email or Password', 401));
+            }
+
+            // Create JSON web Token
+            const token = user.getJWTToken();
+
+            res.status(200).json({
+                success: true,
+                token
+            })
+
+        });
+    b. open models/users.js and append the following
+        // Compare user password in database password
+        userSchema.methods.comparePassword = async function (enterPassword) {
+            return await bcrypt.compare(enterPassword, this.password);
+        }
+    c. open routes/auth.js and append the following
+        const { 
+            registerUser,
+            loginUser
+        } = require('../controllers/authController');
+        
+        router.route('/login').post(loginUser);
+    d. open postman and click on create request (+) button and change it to post request
+        and then click on headers and click on presets and then click on "Set JSON Header".
+        Click on Body and choose raw and format JSON and then type the body as follows
+        {
+            "email":"tst@gmail.com",
+            "password":"simple123"
+        }
+        response should be 
+        {
+            "success": false,
+            "error": {
+                "statusCode": 401
+            },
+            "errMessage": "Invalid Email or Password",
+            "stack": "Error: Invalid Email or Password\n    at /home/fpengine/mysrc/nodeapi/controllers/authController.js:46:21"
+        }
+        same thing should happen in case of incorrect email or/and password.
+        After entering correct email and password, you should get something like
+            {
+                "success": true,
+                "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjVlYzkxNzc1YmIxMzhhNWEwZTI1N2YzNCIsImlhdCI6MTU5MDI0ODUwOCwiZXhwIjoxNTkwODUzMzA4fQ.SGvA7-0wA-Rw9EZn9tZdzKs5MtNXElM83rbg42jx_oo"
+            }
+        Now open postman and click on save to save the request as follows. 
+            Request Name: "Login User"
+            Request Description: "Login user with email & password"
+            choose Authentication folder and click on "save to Authentication".
+
+5. Sending JWT Token in Cookie
+    a.create utils/jwtToken.js and add the following 
+        // Create and send token and save in cookie
+        const sendToken = (user, statusCode, res) => {
+            //create JWT Token
+            const token = user.getJWTToken();
+
+            // Options for cookie
+            const options = {
+                expires: new Date(Date.now() + process.env.COOKIE_EXPIRES_TIME * 24 * 60 * 60 * 1000),
+                httpOnly: true
+            }
+
+            res
+                .status(statusCode)
+                .cookie('token', token, options)
+                .json({
+                    success: true,
+                    token
+                });
+        }
+
+        module.exports = sendToken;
+    b. now install cookie-parser
+        npm i --save cookie-parser
+    c. open app.js and append the following
+        const cookieParser = require('cookie-parser');
+
+        //set cookie-parser
+        app.use(cookieParser());
+    d. open controllers/authController.js and append the following
+        const sendToken = require('../utils/jwtToken');
+
+        Replace this
+            //create JWT token
+            const token = user.getJWTToken();
+
+            res.status(200).json({
+                success: true,
+                message: 'User is registered.',
+                token
+            });
+        with 
+            sendToken(user, 200,res); in registerUser method. 
+        similarly do the same in loginUser method and replace
+                // Create JSON web Token
+                const token = user.getJWTToken();
+
+                res.status(200).json({
+                    success: true,
+                    token
+                })
+        with 
+            sendToken(user, 200,res);
+    e. open config/config.env and add the following 
+        COOKIE_EXPIRES_TIME = 7
+    f. open postman and click on "Login user" post request and click on send 
+        you can now observe the cookie in response with expiry time and httpOnly: true
+    h. open utils/jwtToken.js and add the following
+            if(process.env.NODE_ENV === 'production') {
+                options.secure = true
+            }
+        if you run npm run prod and if you have ssl, only then you will see the cookie. 
+
+6. Protect Routes from Unauthorized Users
+    a. comment the following code for now in utils/jwtToken.js
+            // if(process.env.NODE_ENV === 'production') {
+            //     options.secure = true
+            // }
+    b. To allow only authorised users to create a job, we need a request header called "Authorization" that starts with Bearer and space and then token. For this, we need to create middlewares/auth.js as follows
+
+        const jwt = require('jsonwebtoken');
+        const User = require('../models/users');
+        const catchAsyncErrors = require('../middlewares/catchAsyncErrors');
+        const ErrorHandler = require('../utils/errorHandler');
+
+        //check if user is authenticated or not
+        exports.isAuthenticatedUser = catchAsyncErrors(async (req, res, next) => {
+            let token;
+
+            if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+                token = req.headers.authorization.split(' ')[1];
+            }
+
+            if (!token) {
+                return next(new ErrorHandler('Login first to access the resource.', 401));
+            }
+
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.user = await User.findById(decoded.id);
+
+            next();
+
+        });
+    c. open routes/jobs.js and add the following
+        const { isAuthenticatedUser } = require('../middlewares/auth');
+
+        and modify new job route as below
+        router.route('/job/new').post(isAuthenticatedUser, newJob);
+    d. open postman and click on create new job and send the request, now the response will be 401 and error message: "Login
+        first to access the resource."
+            Now click on "Login user" and send login post request from postman and copy the token from response 
+            click on create new job request and for  "Headers" add key as "Authorization" and for value, paste the copied token. change the title to "PHP intern" in body and send the post request. This will create the new job.
+    e. Now go to routes/jobs.js and do add the authorization for put and delete job routes as follows. 
+        router.route('/job/:id')
+        .put(isAuthenticatedUser, updateJob)
+        .delete(isAuthenticatedUser, deleteJob);
+
+7. Store JWT Token in Postman
+    a. open postman and go to "Login user" post request and go to Tests and write a small script as follows
+        pm.environment.set("token",pm.response.json().token)
+    b. Now send a login post request and click on "environment quick look" i.e eye button on top right corner to verify the
+        presence of token variable.
+    c. Now click on "create new job" post request and go to "Authorization" tab and select Type as "Bearer Token" and set the 
+        Token value as "{{token}}" and finally save the request. 
+    d. change the title to "C intern" in body and send the request and this will create a job.
+
+8. Authorize User Roles & Permissions
+    a. 
+    
+9. Adding User in Jobs
+10. Generate forgot Password Token
+11. Send Password Recovery Email
+12. Reset New Password
+13. Handle Wrong JWT Token & Expire JWT Error
+14. Logout User
+
+Users & Admin Routes
+********************
+1. Show User Profile
+2. Change/Update Password
+3. Update User Data
+4. Delete Current User
+5. Apply to Job with Resume (PDF or DOCX)
+6. Fixing Job Check Error
+7. Add Vitual Property & Populate User
+8. Delete files associated with User
+9. Show all jobs by Current Employer
+10. Show all jobs applied by Current User
+11. Admin - Show all User
+12. Admin - Delete User
+13. Check Owner before update & delete Job
+
+RESTful API Security issues
+***************************
+1. Implementing Rate Limit
+2. Setting Security HTTP Headers
+3. Data Sanitization
+4. Prevent Parameter Pollution
+5. Enabling CORS (Cross-Origin Resource Sharing)
+
+
+
+
+MONGO DB 
+********
+personsCollection.aggregate(
+    { $match: {'addresses.city': 'Boston'} },
+    { $unwind: '$addresses' },
+    { $match: {'addresses.city': 'Boston'} },
+    { $group: {'_id': null, 'content': {$addToSet: '$addresses' }}}
+)
+
+db.fxlives.aggregate(
+    { $match: {'currencyPairs.currencyPair':' EUR/USD'} }, 
+    { $unwind: '$currencyPairs' },
+    { $match: {'currencyPairs.currencyPair':' EUR/USD'} }, 
+    { $group: {'_id': null, 'content': {$addToSet: '$currencyPairs' }}}
+)
+
+db.fxlives.aggregate({ $match: {'currencyPairs.currencyPair':' EUR/USD'} },{ $unwind: '$currencyPairs' }{ $match: {'currencyPairs.currencyPair':' EUR/USD'} } { $group: {'_id': null, 'content': {$addToSet: '$currencyPairs' }}})
+
+
+
+db.articles.find(
+  { stock : { $elemMatch : { country : "01", "warehouse.code" : "02" } } }
+).pretty();
+
+db.fxlives.find({currencyPairs:{$elemMatch : { currencyPair:"EUR/USD"}}}).pretty();

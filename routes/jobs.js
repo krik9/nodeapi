@@ -14,6 +14,8 @@ const {
     jobStats
 } = require('../controllers/jobsController');
 
+const { isAuthenticatedUser } = require('../middlewares/auth');
+
 //Since now we are using controllers, we don't need it.
 //router.get('/jobs', (req, res) => {
 //    res.status(200).json({
@@ -30,10 +32,10 @@ router.route('/stats/:topic').get(jobStats);
 
 router.route('/jobs/:zipcode/:distance').get(getJobsInRadius);
 
-router.route('/job/new').post(newJob);
+router.route('/job/new').post(isAuthenticatedUser, newJob);
 
 router.route('/job/:id')
-    .put(updateJob)
-    .delete(deleteJob);
+    .put(isAuthenticatedUser, updateJob)
+    .delete(isAuthenticatedUser, deleteJob);
 
 module.exports = router;

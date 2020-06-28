@@ -2,6 +2,7 @@ const express = require('express');
 const app = express();
 
 const dotenv = require('dotenv');
+const cookieParser = require('cookie-parser');
 
 //Import the database
 const connectDatabase = require('./config/database');
@@ -26,6 +27,9 @@ connectDatabase();
 //setup body parser
 app.use(express.json());
 
+//set cookie-parser
+app.use(cookieParser());
+
 // //creating own middleware
 // const middleware = (req, res, next) => {
 //     console.log("Hello from middleware");
@@ -40,8 +44,10 @@ app.use(express.json());
 
 //Importing all routes
 const jobs = require('./routes/jobs');
+const auth = require('./routes/auth');
 
 app.use('/api/v1', jobs);
+app.use('/api/v1', auth);
 
 app.all('*',(req,res,next) => {
     
