@@ -19,7 +19,7 @@
     "mongoose": "^5.9.10",
     "node-geocoder": "^3.27.0",
     "slugify": "^1.4.0",
-    "validator": "^13.0.0"
+    "validator": "^13.7.0"
   },
   "devDependencies": {
     "nodemon": "^2.0.3"
